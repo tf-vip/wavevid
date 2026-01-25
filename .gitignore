@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+venv/
+
+# Cache
+.transcribe_cache/
+
+# macOS
+.DS_Store
+
+# Test outputs
+*.mp4
+*.m4a
+
+# IDE
+.vscode/
+.idea/
