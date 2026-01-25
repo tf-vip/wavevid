@@ -2,6 +2,10 @@
 
 Audio to waveform video generator with avatar overlay and auto-transcribed subtitles.
 
+![video](video.png)
+
+[Building process (Vietnamese)](https://tony.edu.vibery.app/resources/qua-trinh-xay-dung-cli-tool-de-tao-video-co-song-am-tu-audio-podcast)
+
 ## Install
 
 ```bash
