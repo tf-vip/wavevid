@@ -171,16 +171,20 @@ def transcribe_audio(audio_path: str, progress_callback=None, use_cache: bool = 
         delete_file(session, file_id)
 
 
-def tokens_to_subtitles(tokens: list[dict], max_chars: int = 60, max_duration_ms: int = 5000) -> list[dict]:
+def tokens_to_subtitles(tokens: list[dict], max_chars: int = 60, max_duration_ms: int = 5000, replacements: dict = None) -> list[dict]:
     """
     Convert tokens to subtitle segments.
     Handles Soniox token format where spaces indicate word boundaries.
+
+    Args:
+        replacements: dict of {"old": "new"} text replacements to apply
 
     Returns list of: [{"text": "phrase", "start_ms": 100, "end_ms": 500}, ...]
     """
     if not tokens:
         return []
 
+    replacements = replacements or {}
     subtitles = []
     current_words = []
     current_start = None
@@ -211,8 +215,11 @@ def tokens_to_subtitles(tokens: list[dict], max_chars: int = 60, max_duration_ms
             if len(current_text) > max_chars or duration > max_duration_ms:
                 # Save current segment
                 if current_text.strip():
+                    final_text = current_text.strip()
+                    for old, new in replacements.items():
+                        final_text = final_text.replace(old, new)
                     subtitles.append({
-                        "text": current_text.strip(),
+                        "text": final_text,
                         "start_ms": current_start,
                         "end_ms": current_end
                     })
@@ -235,6 +242,8 @@ def tokens_to_subtitles(tokens: list[dict], max_chars: int = 60, max_duration_ms
     # Don't forget the last segment
     if current_words:
         final_text = "".join(current_words).strip()
+        for old, new in replacements.items():
+            final_text = final_text.replace(old, new)
         if final_text:
             subtitles.append({
                 "text": final_text,

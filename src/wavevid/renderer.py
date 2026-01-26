@@ -2,6 +2,8 @@
 import subprocess
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from multiprocessing import Pool, cpu_count
+from functools import partial
 from .audio import load_audio, get_amplitude_envelope, get_frequency_bands, get_waveform_chunks
 from .backgrounds import get_background
 from .visualizers import get_visualizer
@@ -133,6 +135,9 @@ def render_video(
     subtitles: list = None,
     subtitle_font_size: int = None,
     subtitle_color: str = '#ffffff',
+    volume: int = 100,
+    intro_sound: str = None,
+    outro_sound: str = None,
     progress_callback=None
 ):
     """Render audio visualization video."""
@@ -196,15 +201,79 @@ def render_video(
         '-r', str(fps),
         '-i', '-',
         '-i', input_audio,
+    ]
+
+    # Add intro/outro inputs
+    input_idx = 2  # Next input index after video (0) and main audio (1)
+    intro_idx = None
+    outro_idx = None
+
+    if intro_sound:
+        ffmpeg_cmd.extend(['-i', intro_sound])
+        intro_idx = input_idx
+        input_idx += 1
+
+    if outro_sound:
+        ffmpeg_cmd.extend(['-i', outro_sound])
+        outro_idx = input_idx
+        input_idx += 1
+
+    ffmpeg_cmd.extend([
         '-c:v', 'libx264',
-        '-preset', 'medium',
+        '-preset', 'ultrafast',  # Much faster encoding
+        '-tune', 'animation',    # Better for generated content
         '-crf', '23',
+    ])
+
+    # Build audio filter
+    # Strategy:
+    # - Normalize all audio sources with loudnorm for consistent volume
+    # - Intro: fadeIn 0.5s, play 5s, fadeOut 10s overlapping with main (lower volume)
+    # - Main: starts at 0, fades in over 3s while intro fades out
+    # - Outro: fadeIn 10s before end, play 5s after main, fadeOut 0.5s
+    volume_factor = volume / 100
+    main_duration_sec = duration  # from load_audio
+
+    if intro_sound or outro_sound:
+        filter_parts = []
+
+        # Main audio: normalize then apply volume, fade in first 3s for smooth transition
+        filter_parts.append(f'[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume={volume_factor},afade=t=in:st=0:d=3[main]')
+
+        if intro_sound and outro_sound:
+            # Intro: normalize, lower volume (0.6), fadeIn 0.5s, fadeOut starting at 5s for 10s
+            filter_parts.append(f'[{intro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:15,afade=t=in:st=0:d=0.5,afade=t=out:st=5:d=10[intro]')
+            # Outro: normalize, lower volume (0.6), fadeIn 10s, fadeOut last 0.5s
+            filter_parts.append(f'[{outro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:15.5,afade=t=in:st=0:d=10,afade=t=out:st=15:d=0.5[outro]')
+            # Delay outro to start 10s before main ends
+            outro_delay_ms = int(max(0, (main_duration_sec - 10)) * 1000)
+            filter_parts.append(f'[outro]adelay={outro_delay_ms}|{outro_delay_ms}[outro_delayed]')
+            # Mix all: intro + main first
+            filter_parts.append('[intro][main]amix=inputs=2:duration=longest:weights=1 1:normalize=0[with_intro]')
+            # Then add outro
+            filter_parts.append('[with_intro][outro_delayed]amix=inputs=2:duration=longest:weights=1 1:normalize=0[aout]')
+        elif intro_sound:
+            # Intro only: normalize, lower volume, fades
+            filter_parts.append(f'[{intro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:15,afade=t=in:st=0:d=0.5,afade=t=out:st=5:d=10[intro]')
+            filter_parts.append('[intro][main]amix=inputs=2:duration=longest:weights=1 1:normalize=0[aout]')
+        else:
+            # Outro only
+            filter_parts.append(f'[{outro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:15.5,afade=t=in:st=0:d=10,afade=t=out:st=15:d=0.5[outro]')
+            outro_delay_ms = int(max(0, (main_duration_sec - 10)) * 1000)
+            filter_parts.append(f'[outro]adelay={outro_delay_ms}|{outro_delay_ms}[outro_delayed]')
+            filter_parts.append('[main][outro_delayed]amix=inputs=2:duration=longest:weights=1 1:normalize=0[aout]')
+
+        ffmpeg_cmd.extend(['-filter_complex', ';'.join(filter_parts), '-map', '0:v', '-map', '[aout]'])
+    elif volume != 100:
+        ffmpeg_cmd.extend(['-af', f'volume={volume_factor}'])
+
+    ffmpeg_cmd.extend([
         '-c:a', 'aac',
         '-b:a', '192k',
         '-pix_fmt', 'yuv420p',
         '-shortest',
         output_video
-    ]
+    ])
 
     process = subprocess.Popen(
         ffmpeg_cmd,
@@ -213,24 +282,38 @@ def render_video(
         stderr=subprocess.DEVNULL
     )
 
-    # Render frames
+    # Pre-compute avatar position
+    ax = ay = None
+    if avatar:
+        ax = (width - avatar.width) // 2
+        ay = (height - avatar.height) // 2
+
+    # Pre-build subtitle lookup table for O(1) access per frame
+    subtitle_lookup = {}
+    if subtitles:
+        for sub in subtitles:
+            start_frame = int(sub['start_ms'] * fps / 1000)
+            end_frame = int(sub['end_ms'] * fps / 1000)
+            for f in range(start_frame, end_frame + 1):
+                if f not in subtitle_lookup:  # First match wins
+                    subtitle_lookup[f] = sub['text']
+
+    # Render frames with optimizations
+    ms_per_frame = 1000 / fps
+    report_interval = fps * 2  # Report every 2 seconds instead of every 1
+
     for i in range(n_frames):
         frame = visualizer.render_frame(background, frame_data, i)
 
         # Overlay avatar at center
         if avatar:
-            frame = frame.convert('RGBA')
-            ax = (width - avatar.width) // 2
-            ay = (height - avatar.height) // 2
+            if frame.mode != 'RGBA':
+                frame = frame.convert('RGBA')
             frame.paste(avatar, (ax, ay), avatar)
 
-        # Draw subtitle if active
-        if subtitles:
-            current_ms = int(i * 1000 / fps)
-            for sub in subtitles:
-                if sub['start_ms'] <= current_ms <= sub['end_ms']:
-                    frame = draw_subtitle(frame, sub['text'], subtitle_font_size, sub_color, subtitle_y)
-                    break
+        # Draw subtitle if active (O(1) lookup)
+        if i in subtitle_lookup:
+            frame = draw_subtitle(frame, subtitle_lookup[i], subtitle_font_size, sub_color, subtitle_y)
 
         # Ensure RGB for output
         if frame.mode != 'RGB':
@@ -238,7 +321,7 @@ def render_video(
 
         process.stdin.write(frame.tobytes())
 
-        if progress_callback and i % fps == 0:
+        if progress_callback and i % report_interval == 0:
             progress_callback(f"Frame {i}/{n_frames} ({i * 100 // n_frames}%)")
 
     process.stdin.close()

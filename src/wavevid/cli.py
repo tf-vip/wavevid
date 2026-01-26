@@ -4,8 +4,18 @@ import random
 from pathlib import Path
 from .renderer import render_video
 
-# Default backgrounds directory (inside package)
+# Default directories (inside package)
 BACKGROUNDS_DIR = Path(__file__).parent / 'backgrounds'
+SOUNDS_DIR = Path(__file__).parent / 'sounds'
+
+
+def discover_files(directory: Path, extensions: list[str]) -> list[Path]:
+    """Dynamically discover files with given extensions in directory."""
+    files = []
+    for ext in extensions:
+        files.extend(directory.glob(f'*.{ext}'))
+        files.extend(directory.glob(f'**/*.{ext}'))
+    return list(set(files))
 
 
 @click.command()
@@ -14,7 +24,7 @@ BACKGROUNDS_DIR = Path(__file__).parent / 'backgrounds'
 @click.option('--style', type=click.Choice(['waveform', 'radial', 'bars']), default='waveform', help='Visualization style')
 @click.option('--bg', 'bg_type', type=click.Choice(['color', 'gradient', 'image', 'random']), default='color', help='Background type (random picks from backgrounds/)')
 @click.option('--bg-value', default='#1a1a2e', help='Background value: hex color, "color1,color2" for gradient, or image path')
-@click.option('--wave-color', default='#00ff88', help='Wave/bar color (hex)')
+@click.option('--wave-color', default='#00ff88', help='Wave/bar color (hex or "auto" for smart detection)')
 @click.option('--width', default=1920, help='Video width')
 @click.option('--height', default=1080, help='Video height')
 @click.option('--fps', default=30, help='Frames per second')
@@ -22,12 +32,16 @@ BACKGROUNDS_DIR = Path(__file__).parent / 'backgrounds'
 @click.option('--avatar-size', type=int, help='Avatar size in pixels (default: 1/4 of min dimension)')
 @click.option('--subtitle/--no-subtitle', default=False, help='Enable subtitle transcription via Soniox')
 @click.option('--subtitle-font-size', type=int, help='Subtitle font size (default: height/20)')
-@click.option('--subtitle-color', default='#ffffff', help='Subtitle text color (hex)')
-def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width, height, fps, avatar_path, avatar_size, subtitle, subtitle_font_size, subtitle_color):
+@click.option('--subtitle-color', default='auto', help='Subtitle text color (hex or "auto")')
+@click.option('--volume', default=100, type=int, help='Audio volume percentage (e.g., 120 for 120%)')
+@click.option('--replace', 'replacements', multiple=True, help='Text replacement in subtitles (format: old=new)')
+@click.option('--intro', 'intro_sound', type=click.Path(exists=True), help='Intro sound file (fadeIn 0.5s, play 5s, fadeOut 10s)')
+@click.option('--outro', 'outro_sound', type=click.Path(exists=True), help='Outro sound file (fadeIn 10s, play 5s, fadeOut 0.5s)')
+def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width, height, fps, avatar_path, avatar_size, subtitle, subtitle_font_size, subtitle_color, volume, replacements, intro_sound, outro_sound):
     """Generate waveform video from audio file."""
-    # Handle random background selection
+    # Handle random background selection (dynamic discovery)
     if bg_type == 'random':
-        bg_files = list(BACKGROUNDS_DIR.glob('*.jpg')) + list(BACKGROUNDS_DIR.glob('*.png'))
+        bg_files = discover_files(BACKGROUNDS_DIR, ['jpg', 'jpeg', 'png', 'webp'])
         if bg_files:
             bg_value = str(random.choice(bg_files))
             bg_type = 'image'
@@ -37,9 +51,25 @@ def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width,
             bg_type = 'color'
             bg_value = '#1a1a2e'
 
+    # Handle auto colors
+    temp_bg = None
+    if (wave_color == 'auto' or subtitle_color == 'auto') and bg_type == 'image':
+        from .backgrounds import get_background, calculate_auto_wave_color, calculate_auto_subtitle_color
+        temp_bg = get_background(width, height, bg_type, bg_value)
+
+        if wave_color == 'auto':
+            wave_color = calculate_auto_wave_color(temp_bg)
+            click.echo(f"Auto wave color: {wave_color}")
+
+        if subtitle_color == 'auto':
+            subtitle_color = calculate_auto_subtitle_color(temp_bg)
+            click.echo(f"Auto subtitle color: {subtitle_color}")
+
     click.echo(f"Input: {input_audio}")
     click.echo(f"Output: {output_video}")
     click.echo(f"Style: {style}, Resolution: {width}x{height}, FPS: {fps}")
+    if volume != 100:
+        click.echo(f"Volume: {volume}%")
 
     def progress(msg):
         click.echo(msg)
@@ -50,7 +80,13 @@ def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width,
         from .transcribe import transcribe_audio, tokens_to_subtitles
         click.echo("Transcribing audio...")
         tokens = transcribe_audio(input_audio, progress_callback=progress)
-        subtitles = tokens_to_subtitles(tokens)
+        # Parse replacements
+        replace_dict = {}
+        for r in replacements:
+            if '=' in r:
+                old, new = r.split('=', 1)
+                replace_dict[old] = new
+        subtitles = tokens_to_subtitles(tokens, replacements=replace_dict)
         click.echo(f"Generated {len(subtitles)} subtitle segments")
 
     success = render_video(
@@ -68,6 +104,9 @@ def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width,
         subtitles=subtitles,
         subtitle_font_size=subtitle_font_size,
         subtitle_color=subtitle_color,
+        volume=volume,
+        intro_sound=intro_sound,
+        outro_sound=outro_sound,
         progress_callback=progress
     )
 
