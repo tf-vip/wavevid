@@ -35,9 +35,11 @@ def discover_files(directory: Path, extensions: list[str]) -> list[Path]:
 @click.option('--subtitle-color', default='auto', help='Subtitle text color (hex or "auto")')
 @click.option('--volume', default=100, type=int, help='Audio volume percentage (e.g., 120 for 120%)')
 @click.option('--replace', 'replacements', multiple=True, help='Text replacement in subtitles (format: old=new)')
-@click.option('--intro', 'intro_sound', type=click.Path(exists=True), help='Intro sound file (fadeIn 0.5s, play 5s, fadeOut 10s)')
-@click.option('--outro', 'outro_sound', type=click.Path(exists=True), help='Outro sound file (fadeIn 10s, play 5s, fadeOut 0.5s)')
-def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width, height, fps, avatar_path, avatar_size, subtitle, subtitle_font_size, subtitle_color, volume, replacements, intro_sound, outro_sound):
+@click.option('--replace-file', type=click.Path(exists=True), help='File with replacements (one per line: old=new)')
+@click.option('--intro', 'intro_sound', type=click.Path(exists=True), help='Intro sound file')
+@click.option('--intro-duration', default=3.0, type=float, help='Intro solo duration in seconds before main audio starts (default: 3)')
+@click.option('--outro', 'outro_sound', type=click.Path(exists=True), help='Outro sound file')
+def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width, height, fps, avatar_path, avatar_size, subtitle, subtitle_font_size, subtitle_color, volume, replacements, replace_file, intro_sound, intro_duration, outro_sound):
     """Generate waveform video from audio file."""
     # Handle random background selection (dynamic discovery)
     if bg_type == 'random':
@@ -80,8 +82,16 @@ def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width,
         from .transcribe import transcribe_audio, tokens_to_subtitles
         click.echo("Transcribing audio...")
         tokens = transcribe_audio(input_audio, progress_callback=progress)
-        # Parse replacements
+        # Parse replacements from file and command line
         replace_dict = {}
+        if replace_file:
+            with open(replace_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and '=' in line and not line.startswith('#'):
+                        old, new = line.split('=', 1)
+                        replace_dict[old] = new
+        # Command line replacements override file
         for r in replacements:
             if '=' in r:
                 old, new = r.split('=', 1)
@@ -106,6 +116,7 @@ def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width,
         subtitle_color=subtitle_color,
         volume=volume,
         intro_sound=intro_sound,
+        intro_duration=intro_duration,
         outro_sound=outro_sound,
         progress_callback=progress
     )

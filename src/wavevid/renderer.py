@@ -137,6 +137,7 @@ def render_video(
     subtitle_color: str = '#ffffff',
     volume: int = 100,
     intro_sound: str = None,
+    intro_duration: float = 3.0,
     outro_sound: str = None,
     progress_callback=None
 ):
@@ -188,8 +189,13 @@ def render_video(
     sub_color_hex = subtitle_color.lstrip('#')
     sub_color = tuple(int(sub_color_hex[i:i+2], 16) for i in (0, 2, 4)) + (255,)
 
+    # Calculate total frames including intro padding
+    intro_solo_ms = int(intro_duration * 1000) if intro_sound else 0
+    intro_frames = int(intro_solo_ms * fps / 1000)
+    total_frames = n_frames + intro_frames
+
     if progress_callback:
-        progress_callback(f"Rendering {n_frames} frames...")
+        progress_callback(f"Rendering {total_frames} frames...")
 
     # Setup FFmpeg pipe
     ffmpeg_cmd = [
@@ -228,25 +234,31 @@ def render_video(
     # Build audio filter
     # Strategy:
     # - Normalize all audio sources with loudnorm for consistent volume
-    # - Intro: fadeIn 0.5s, play 5s, fadeOut 10s overlapping with main (lower volume)
-    # - Main: starts at 0, fades in over 3s while intro fades out
+    # - Intro: fadeIn 0.5s, play intro_duration solo, then fadeOut 10s while main starts
+    # - Main: delayed by intro_duration, fades in over 3s while intro fades out
     # - Outro: fadeIn 10s before end, play 5s after main, fadeOut 0.5s
     volume_factor = volume / 100
     main_duration_sec = duration  # from load_audio
+    intro_delay_ms = int(intro_duration * 1000) if intro_sound else 0
+    intro_trim = intro_duration + 10  # solo + fadeout overlap
 
     if intro_sound or outro_sound:
         filter_parts = []
 
-        # Main audio: normalize then apply volume, fade in first 3s for smooth transition
-        filter_parts.append(f'[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume={volume_factor},afade=t=in:st=0:d=3[main]')
+        if intro_sound:
+            # Main audio: normalize, apply volume, delay by intro_duration, fade in
+            filter_parts.append(f'[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume={volume_factor},adelay={intro_delay_ms}|{intro_delay_ms},afade=t=in:st=0:d=3[main]')
+        else:
+            # No intro: main starts immediately
+            filter_parts.append(f'[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume={volume_factor},afade=t=in:st=0:d=3[main]')
 
         if intro_sound and outro_sound:
-            # Intro: normalize, lower volume (0.6), fadeIn 0.5s, fadeOut starting at 5s for 10s
-            filter_parts.append(f'[{intro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:15,afade=t=in:st=0:d=0.5,afade=t=out:st=5:d=10[intro]')
+            # Intro: normalize, lower volume (0.6), fadeIn 0.5s, fadeOut starting at intro_duration for 10s
+            filter_parts.append(f'[{intro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:{intro_trim},afade=t=in:st=0:d=0.5,afade=t=out:st={intro_duration}:d=10[intro]')
             # Outro: normalize, lower volume (0.6), fadeIn 10s, fadeOut last 0.5s
             filter_parts.append(f'[{outro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:15.5,afade=t=in:st=0:d=10,afade=t=out:st=15:d=0.5[outro]')
-            # Delay outro to start 10s before main ends
-            outro_delay_ms = int(max(0, (main_duration_sec - 10)) * 1000)
+            # Delay outro to start 10s before main ends (account for main's delay)
+            outro_delay_ms = int(max(0, (main_duration_sec - 10)) * 1000) + intro_delay_ms
             filter_parts.append(f'[outro]adelay={outro_delay_ms}|{outro_delay_ms}[outro_delayed]')
             # Mix all: intro + main first
             filter_parts.append('[intro][main]amix=inputs=2:duration=longest:weights=1 1:normalize=0[with_intro]')
@@ -254,7 +266,7 @@ def render_video(
             filter_parts.append('[with_intro][outro_delayed]amix=inputs=2:duration=longest:weights=1 1:normalize=0[aout]')
         elif intro_sound:
             # Intro only: normalize, lower volume, fades
-            filter_parts.append(f'[{intro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:15,afade=t=in:st=0:d=0.5,afade=t=out:st=5:d=10[intro]')
+            filter_parts.append(f'[{intro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:{intro_trim},afade=t=in:st=0:d=0.5,afade=t=out:st={intro_duration}:d=10[intro]')
             filter_parts.append('[intro][main]amix=inputs=2:duration=longest:weights=1 1:normalize=0[aout]')
         else:
             # Outro only
@@ -289,21 +301,26 @@ def render_video(
         ay = (height - avatar.height) // 2
 
     # Pre-build subtitle lookup table for O(1) access per frame
+    # Account for intro delay - subtitles sync with main audio which is delayed
+    subtitle_offset_frames = intro_frames
     subtitle_lookup = {}
     if subtitles:
         for sub in subtitles:
-            start_frame = int(sub['start_ms'] * fps / 1000)
-            end_frame = int(sub['end_ms'] * fps / 1000)
+            start_frame = int(sub['start_ms'] * fps / 1000) + subtitle_offset_frames
+            end_frame = int(sub['end_ms'] * fps / 1000) + subtitle_offset_frames
             for f in range(start_frame, end_frame + 1):
                 if f not in subtitle_lookup:  # First match wins
                     subtitle_lookup[f] = sub['text']
 
     # Render frames with optimizations
-    ms_per_frame = 1000 / fps
     report_interval = fps * 2  # Report every 2 seconds instead of every 1
 
-    for i in range(n_frames):
-        frame = visualizer.render_frame(background, frame_data, i)
+    for i in range(total_frames):
+        # For intro frames, use frame 0 data (static); otherwise offset by intro_frames
+        data_idx = max(0, i - intro_frames) if intro_frames > 0 else i
+        data_idx = min(data_idx, n_frames - 1)  # Clamp to valid range
+
+        frame = visualizer.render_frame(background, frame_data, data_idx)
 
         # Overlay avatar at center
         if avatar:
@@ -322,7 +339,7 @@ def render_video(
         process.stdin.write(frame.tobytes())
 
         if progress_callback and i % report_interval == 0:
-            progress_callback(f"Frame {i}/{n_frames} ({i * 100 // n_frames}%)")
+            progress_callback(f"Frame {i}/{total_frames} ({i * 100 // total_frames}%)")
 
     process.stdin.close()
     process.wait()
