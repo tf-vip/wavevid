@@ -104,6 +104,31 @@ def calculate_auto_subtitle_color(background: Image.Image) -> str:
         return '#1a1a1a'  # Near-black on light
 
 
+def calculate_auto_title_color(background: Image.Image) -> str:
+    """
+    Calculate optimal title color based on background center region.
+    Title appears centered, so we analyze the center area.
+    Returns white or near-black based on luminance for best readability.
+    """
+    width, height = background.size
+
+    # Sample center 60% where title appears
+    margin_x = int(width * 0.2)
+    margin_y = int(height * 0.2)
+    center_region = background.crop((margin_x, margin_y, width - margin_x, height - margin_y))
+    sample = center_region.resize((100, 100), Image.Resampling.NEAREST)
+    pixels = np.array(sample).reshape(-1, 3)
+
+    # Calculate average luminance
+    avg_luminance = np.mean([get_luminance(p[0], p[1], p[2]) for p in pixels])
+
+    # White text on dark, near-black on light
+    if avg_luminance < 0.5:
+        return '#ffffff'  # White on dark
+    else:
+        return '#1a1a1a'  # Near-black on light
+
+
 def calculate_auto_wave_color(background: Image.Image) -> str:
     """
     Calculate optimal wave color based on background.

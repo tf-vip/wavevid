@@ -169,12 +169,20 @@ def extract_video_frames(video_path: str, width: int, height: int, fps: int, max
     process.wait()
 
 
-def draw_intro_title(img: Image.Image, title: str, font_path: str, width: int, height: int) -> Image.Image:
+def draw_intro_title(img: Image.Image, title: str, font_path: str, width: int, height: int, title_color: str = '#ffffff') -> Image.Image:
     """Draw centered title text on intro frame."""
     if img.mode != 'RGBA':
         img = img.convert('RGBA')
 
     draw = ImageDraw.Draw(img)
+
+    # Parse title color
+    color_hex = title_color.lstrip('#')
+    text_color = tuple(int(color_hex[i:i+2], 16) for i in (0, 2, 4)) + (255,)
+
+    # Calculate shadow color (opposite luminance)
+    luminance = (text_color[0] * 0.299 + text_color[1] * 0.587 + text_color[2] * 0.114) / 255
+    shadow_color = (0, 0, 0, 180) if luminance > 0.5 else (255, 255, 255, 120)
 
     # Calculate font size based on image dimensions (roughly 1/10 of width for good readability)
     font_size = max(48, width // 15)
@@ -207,9 +215,9 @@ def draw_intro_title(img: Image.Image, title: str, font_path: str, width: int, h
     for i, line in enumerate(lines):
         line_x = (width - line_widths[i]) // 2
         # Shadow
-        draw.text((line_x + 2, current_y + 2), line, font=font, fill=(0, 0, 0, 180))
+        draw.text((line_x + 2, current_y + 2), line, font=font, fill=shadow_color)
         # Main text
-        draw.text((line_x, current_y), line, font=font, fill=(255, 255, 255, 255))
+        draw.text((line_x, current_y), line, font=font, fill=text_color)
         current_y += line_heights[i] + line_spacing
 
     return img
@@ -246,6 +254,7 @@ def render_video(
     intro_title: str = None,
     intro_bg: str = None,
     intro_font: str = None,
+    intro_title_color: str = '#ffffff',
     intro_clip_duration: float = 3.0,
     progress_callback=None
 ):
@@ -311,7 +320,7 @@ def render_video(
         if intro_bg and is_video_file(intro_bg):
             # Extract frames from video background
             for frame in extract_video_frames(intro_bg, width, height, fps, intro_clip_frame_count):
-                intro_frame = draw_intro_title(frame, intro_title, intro_font, width, height)
+                intro_frame = draw_intro_title(frame, intro_title, intro_font, width, height, intro_title_color)
                 intro_clip_frames_list.append(intro_frame)
             # If video is shorter than needed, repeat last frame
             while len(intro_clip_frames_list) < intro_clip_frame_count:
@@ -327,7 +336,7 @@ def render_video(
                 if intro_bg_img.mode != 'RGBA':
                     intro_bg_img = intro_bg_img.convert('RGBA')
 
-            intro_frame = draw_intro_title(intro_bg_img, intro_title, intro_font, width, height)
+            intro_frame = draw_intro_title(intro_bg_img, intro_title, intro_font, width, height, intro_title_color)
             # Repeat static frame for entire duration
             intro_clip_frames_list = [intro_frame] * intro_clip_frame_count
 

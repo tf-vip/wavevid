@@ -44,8 +44,9 @@ def discover_files(directory: Path, extensions: list[str]) -> list[Path]:
 @click.option('--intro-title', help='Title text to display on intro clip')
 @click.option('--intro-bg', type=click.Path(exists=True), help='Intro background (image or video file)')
 @click.option('--intro-font', type=click.Path(exists=True), help='Custom font for intro title (default: Be Vietnam Pro Bold)')
+@click.option('--intro-title-color', default='auto', help='Intro title color (hex or "auto")')
 @click.option('--intro-clip-duration', default=3.0, type=float, help='Intro clip duration in seconds (default: 3)')
-def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width, height, fps, avatar_path, avatar_size, subtitle, subtitle_font_size, subtitle_color, volume, replacements, replace_file, intro_sound, intro_duration, outro_sound, intro_title, intro_bg, intro_font, intro_clip_duration):
+def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width, height, fps, avatar_path, avatar_size, subtitle, subtitle_font_size, subtitle_color, volume, replacements, replace_file, intro_sound, intro_duration, outro_sound, intro_title, intro_bg, intro_font, intro_title_color, intro_clip_duration):
     """Generate waveform video from audio file."""
     # Handle random background selection (dynamic discovery)
     if bg_type == 'random':
@@ -79,6 +80,24 @@ def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width,
         click.echo(f"Intro clip: {intro_clip_duration}s with title")
         if intro_bg:
             click.echo(f"Intro background: {Path(intro_bg).name}")
+
+        # Auto detect intro title color based on intro background
+        if intro_title_color == 'auto':
+            from .backgrounds import get_background, calculate_auto_title_color
+            if intro_bg and not intro_bg.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v')):
+                # Static image - calculate auto color
+                intro_bg_img = get_background(width, height, 'image', intro_bg)
+                intro_title_color = calculate_auto_title_color(intro_bg_img)
+            elif bg_type == 'image':
+                # Use main background for auto color
+                if temp_bg is None:
+                    from .backgrounds import get_background, calculate_auto_title_color
+                    temp_bg = get_background(width, height, bg_type, bg_value)
+                intro_title_color = calculate_auto_title_color(temp_bg)
+            else:
+                # Default to white for dark backgrounds
+                intro_title_color = '#ffffff'
+            click.echo(f"Auto intro title color: {intro_title_color}")
 
     click.echo(f"Input: {input_audio}")
     click.echo(f"Output: {output_video}")
@@ -134,6 +153,7 @@ def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width,
         intro_title=intro_title,
         intro_bg=intro_bg,
         intro_font=intro_font_path,
+        intro_title_color=intro_title_color,
         intro_clip_duration=intro_clip_duration,
         progress_callback=progress
     )
