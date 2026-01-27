@@ -256,6 +256,8 @@ def render_video(
     intro_font: str = None,
     intro_title_color: str = '#ffffff',
     intro_clip_duration: float = 3.0,
+    bg_music: str = None,
+    bg_music_volume: int = 15,
     progress_callback=None
 ):
     """Render audio visualization video."""
@@ -361,10 +363,11 @@ def render_video(
         '-i', input_audio,
     ]
 
-    # Add intro/outro inputs
+    # Add intro/outro/bg_music inputs
     input_idx = 2  # Next input index after video (0) and main audio (1)
     intro_idx = None
     outro_idx = None
+    bg_music_idx = None
 
     if intro_sound:
         ffmpeg_cmd.extend(['-i', intro_sound])
@@ -374,6 +377,12 @@ def render_video(
     if outro_sound:
         ffmpeg_cmd.extend(['-i', outro_sound])
         outro_idx = input_idx
+        input_idx += 1
+
+    if bg_music:
+        # Use stream_loop to loop the background music
+        ffmpeg_cmd.extend(['-stream_loop', '-1', '-i', bg_music])
+        bg_music_idx = input_idx
         input_idx += 1
 
     ffmpeg_cmd.extend([
@@ -390,7 +399,9 @@ def render_video(
     # - Intro sound: fadeIn 0.5s, play intro_duration solo, then fadeOut 10s while main starts
     # - Main: delayed by intro_clip + intro_duration, fades in over 3s while intro fades out
     # - Outro: fadeIn 10s before end, play 5s after main, fadeOut 0.5s
+    # - Background music: loops throughout, low volume, fade in/out at edges
     volume_factor = volume / 100
+    bg_music_factor = bg_music_volume / 100 if bg_music else 0
     main_duration_sec = duration  # from load_audio
     # Total audio delay = intro clip duration + intro sound duration
     intro_clip_delay_ms = int(intro_clip_duration * 1000) if intro_title else 0
@@ -398,7 +409,10 @@ def render_video(
     total_audio_delay_ms = intro_clip_delay_ms + intro_sound_delay_ms
     intro_trim = intro_duration + 10  # solo + fadeout overlap
 
-    if intro_sound or outro_sound or intro_title:
+    # Calculate total video duration for bg music trim
+    total_video_duration = main_duration_sec + (intro_clip_duration if intro_title else 0) + (intro_duration if intro_sound else 0)
+
+    if intro_sound or outro_sound or intro_title or bg_music:
         filter_parts = []
 
         if intro_sound:
@@ -410,6 +424,9 @@ def render_video(
         else:
             # No intro: main starts immediately
             filter_parts.append(f'[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume={volume_factor},afade=t=in:st=0:d=3[main]')
+
+        # Build the mix chain - start with main
+        current_mix = 'main'
 
         if intro_sound and outro_sound:
             # Intro sound: normalize, lower volume (0.6), delay by intro clip, fadeIn 0.5s, fadeOut starting at intro_duration for 10s
@@ -423,21 +440,32 @@ def render_video(
             # Mix all: intro + main first
             filter_parts.append('[intro][main]amix=inputs=2:duration=longest:weights=1 1:normalize=0[with_intro]')
             # Then add outro
-            filter_parts.append('[with_intro][outro_delayed]amix=inputs=2:duration=longest:weights=1 1:normalize=0[aout]')
+            filter_parts.append('[with_intro][outro_delayed]amix=inputs=2:duration=longest:weights=1 1:normalize=0[premix]')
+            current_mix = 'premix'
         elif intro_sound:
             # Intro sound only: normalize, lower volume, delay by intro clip, fades
             intro_sound_start_delay = intro_clip_delay_ms
             filter_parts.append(f'[{intro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:{intro_trim},afade=t=in:st=0:d=0.5,afade=t=out:st={intro_duration}:d=10,adelay={intro_sound_start_delay}|{intro_sound_start_delay}[intro]')
-            filter_parts.append('[intro][main]amix=inputs=2:duration=longest:weights=1 1:normalize=0[aout]')
+            filter_parts.append('[intro][main]amix=inputs=2:duration=longest:weights=1 1:normalize=0[premix]')
+            current_mix = 'premix'
         elif outro_sound:
             # Outro only
             filter_parts.append(f'[{outro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:15.5,afade=t=in:st=0:d=10,afade=t=out:st=15:d=0.5[outro]')
             outro_delay_ms = int(max(0, (main_duration_sec - 10)) * 1000) + intro_clip_delay_ms
             filter_parts.append(f'[outro]adelay={outro_delay_ms}|{outro_delay_ms}[outro_delayed]')
-            filter_parts.append('[main][outro_delayed]amix=inputs=2:duration=longest:weights=1 1:normalize=0[aout]')
+            filter_parts.append('[main][outro_delayed]amix=inputs=2:duration=longest:weights=1 1:normalize=0[premix]')
+            current_mix = 'premix'
+
+        # Add background music if provided
+        if bg_music:
+            # Background music: trim to video length, low volume, fade in 2s at start, fade out 3s at end
+            fade_out_start = max(0, total_video_duration - 3)
+            filter_parts.append(f'[{bg_music_idx}:a]atrim=0:{total_video_duration},volume={bg_music_factor},afade=t=in:st=0:d=2,afade=t=out:st={fade_out_start}:d=3[bgm]')
+            # Mix bg music with current mix
+            filter_parts.append(f'[{current_mix}][bgm]amix=inputs=2:duration=first:weights=1 1:normalize=0[aout]')
         else:
-            # Intro clip only, no intro/outro sound - just use delayed main
-            filter_parts.append('[main]anull[aout]')
+            # No bg music, rename current mix to aout
+            filter_parts.append(f'[{current_mix}]anull[aout]')
 
         ffmpeg_cmd.extend(['-filter_complex', ';'.join(filter_parts), '-map', '0:v', '-map', '[aout]'])
     elif volume != 100:

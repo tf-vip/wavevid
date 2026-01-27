@@ -46,7 +46,9 @@ def discover_files(directory: Path, extensions: list[str]) -> list[Path]:
 @click.option('--intro-font', type=click.Path(exists=True), help='Custom font for intro title (default: Be Vietnam Pro Bold)')
 @click.option('--intro-title-color', default='auto', help='Intro title color (hex or "auto")')
 @click.option('--intro-clip-duration', default=3.0, type=float, help='Intro clip duration in seconds (default: 3)')
-def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width, height, fps, avatar_path, avatar_size, subtitle, subtitle_font_size, subtitle_color, volume, replacements, replace_file, intro_sound, intro_duration, outro_sound, intro_title, intro_bg, intro_font, intro_title_color, intro_clip_duration):
+@click.option('--bg-music', type=click.Path(exists=True), help='Background music file (loops throughout video)')
+@click.option('--bg-music-volume', default=15, type=int, help='Background music volume percentage (default: 15)')
+def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width, height, fps, avatar_path, avatar_size, subtitle, subtitle_font_size, subtitle_color, volume, replacements, replace_file, intro_sound, intro_duration, outro_sound, intro_title, intro_bg, intro_font, intro_title_color, intro_clip_duration, bg_music, bg_music_volume):
     """Generate waveform video from audio file."""
     # Handle random background selection (dynamic discovery)
     if bg_type == 'random':
@@ -98,6 +100,10 @@ def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width,
                 # Default to white for dark backgrounds
                 intro_title_color = '#ffffff'
             click.echo(f"Auto intro title color: {intro_title_color}")
+
+    # Log background music if provided
+    if bg_music:
+        click.echo(f"Background music: {Path(bg_music).name} at {bg_music_volume}%")
 
     click.echo(f"Input: {input_audio}")
     click.echo(f"Output: {output_video}")
@@ -155,6 +161,8 @@ def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width,
         intro_font=intro_font_path,
         intro_title_color=intro_title_color,
         intro_clip_duration=intro_clip_duration,
+        bg_music=bg_music,
+        bg_music_volume=bg_music_volume,
         progress_callback=progress
     )
 
