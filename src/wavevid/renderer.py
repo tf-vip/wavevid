@@ -1,6 +1,7 @@
 """Frame generation and video output via FFmpeg."""
 import subprocess
 import numpy as np
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from multiprocessing import Pool, cpu_count
 from functools import partial
@@ -120,6 +121,109 @@ def load_avatar(path: str, size: int) -> Image.Image:
     return output
 
 
+def is_video_file(path: str) -> bool:
+    """Check if file is a video based on extension."""
+    video_exts = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'}
+    return Path(path).suffix.lower() in video_exts
+
+
+def get_video_frame_count(video_path: str, fps: int) -> int:
+    """Get approximate frame count for a video at given fps."""
+    import json
+    cmd = [
+        'ffprobe', '-v', 'quiet', '-print_format', 'json',
+        '-show_format', video_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        data = json.loads(result.stdout)
+        duration = float(data['format'].get('duration', 0))
+        return int(duration * fps)
+    return 0
+
+
+def extract_video_frames(video_path: str, width: int, height: int, fps: int, max_frames: int):
+    """Extract frames from video file, yielding PIL Images."""
+    cmd = [
+        'ffmpeg', '-i', video_path,
+        '-vf', f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2',
+        '-r', str(fps),
+        '-f', 'rawvideo',
+        '-pix_fmt', 'rgb24',
+        '-frames:v', str(max_frames),
+        '-'
+    ]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    frame_size = width * height * 3
+
+    frames_read = 0
+    while frames_read < max_frames:
+        raw = process.stdout.read(frame_size)
+        if len(raw) < frame_size:
+            break
+        frame = Image.frombytes('RGB', (width, height), raw)
+        yield frame
+        frames_read += 1
+
+    process.stdout.close()
+    process.wait()
+
+
+def draw_intro_title(img: Image.Image, title: str, font_path: str, width: int, height: int) -> Image.Image:
+    """Draw centered title text on intro frame."""
+    if img.mode != 'RGBA':
+        img = img.convert('RGBA')
+
+    draw = ImageDraw.Draw(img)
+
+    # Calculate font size based on image dimensions (roughly 1/10 of width for good readability)
+    font_size = max(48, width // 15)
+
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except (OSError, IOError):
+        font = get_font(font_size)
+
+    # Wrap text if needed
+    max_width = int(width * 0.8)
+    lines = wrap_text(title, font, max_width, draw)
+
+    # Calculate total height
+    line_heights = []
+    line_widths = []
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_widths.append(bbox[2] - bbox[0])
+        line_heights.append(bbox[3] - bbox[1])
+
+    line_spacing = 10
+    total_height = sum(line_heights) + line_spacing * (len(lines) - 1)
+
+    # Center vertically
+    start_y = (height - total_height) // 2
+
+    # Draw each line centered with shadow for readability
+    current_y = start_y
+    for i, line in enumerate(lines):
+        line_x = (width - line_widths[i]) // 2
+        # Shadow
+        draw.text((line_x + 2, current_y + 2), line, font=font, fill=(0, 0, 0, 180))
+        # Main text
+        draw.text((line_x, current_y), line, font=font, fill=(255, 255, 255, 255))
+        current_y += line_heights[i] + line_spacing
+
+    return img
+
+
+def blend_frames(frame1: Image.Image, frame2: Image.Image, alpha: float) -> Image.Image:
+    """Blend two frames together. alpha=0 is all frame1, alpha=1 is all frame2."""
+    if frame1.mode != 'RGBA':
+        frame1 = frame1.convert('RGBA')
+    if frame2.mode != 'RGBA':
+        frame2 = frame2.convert('RGBA')
+    return Image.blend(frame1, frame2, alpha)
+
+
 def render_video(
     input_audio: str,
     output_video: str,
@@ -139,6 +243,10 @@ def render_video(
     intro_sound: str = None,
     intro_duration: float = 3.0,
     outro_sound: str = None,
+    intro_title: str = None,
+    intro_bg: str = None,
+    intro_font: str = None,
+    intro_clip_duration: float = 3.0,
     progress_callback=None
 ):
     """Render audio visualization video."""
@@ -189,10 +297,45 @@ def render_video(
     sub_color_hex = subtitle_color.lstrip('#')
     sub_color = tuple(int(sub_color_hex[i:i+2], 16) for i in (0, 2, 4)) + (255,)
 
-    # Calculate total frames including intro padding
+    # Prepare intro clip if title is provided
+    intro_clip_frames_list = []
+    intro_clip_frame_count = 0
+    fade_duration_frames = int(fps * 0.5)  # 0.5 second fade transition
+
+    if intro_title:
+        intro_clip_frame_count = int(intro_clip_duration * fps)
+        if progress_callback:
+            progress_callback(f"Preparing intro clip ({intro_clip_frame_count} frames)...")
+
+        # Load intro background (image or video)
+        if intro_bg and is_video_file(intro_bg):
+            # Extract frames from video background
+            for frame in extract_video_frames(intro_bg, width, height, fps, intro_clip_frame_count):
+                intro_frame = draw_intro_title(frame, intro_title, intro_font, width, height)
+                intro_clip_frames_list.append(intro_frame)
+            # If video is shorter than needed, repeat last frame
+            while len(intro_clip_frames_list) < intro_clip_frame_count:
+                intro_clip_frames_list.append(intro_clip_frames_list[-1].copy() if intro_clip_frames_list else None)
+        else:
+            # Static image background
+            if intro_bg:
+                intro_bg_img = Image.open(intro_bg).convert('RGBA')
+                intro_bg_img = intro_bg_img.resize((width, height), Image.Resampling.LANCZOS)
+            else:
+                # Use main background as fallback
+                intro_bg_img = background.copy()
+                if intro_bg_img.mode != 'RGBA':
+                    intro_bg_img = intro_bg_img.convert('RGBA')
+
+            intro_frame = draw_intro_title(intro_bg_img, intro_title, intro_font, width, height)
+            # Repeat static frame for entire duration
+            intro_clip_frames_list = [intro_frame] * intro_clip_frame_count
+
+    # Calculate total frames including intro padding (for audio) and intro clip
     intro_solo_ms = int(intro_duration * 1000) if intro_sound else 0
-    intro_frames = int(intro_solo_ms * fps / 1000)
-    total_frames = n_frames + intro_frames
+    intro_audio_frames = int(intro_solo_ms * fps / 1000)
+    # Total = intro clip + main waveform frames (audio intro padding is handled separately)
+    total_frames = intro_clip_frame_count + n_frames + intro_audio_frames
 
     if progress_callback:
         progress_callback(f"Rendering {total_frames} frames...")
@@ -234,46 +377,58 @@ def render_video(
     # Build audio filter
     # Strategy:
     # - Normalize all audio sources with loudnorm for consistent volume
-    # - Intro: fadeIn 0.5s, play intro_duration solo, then fadeOut 10s while main starts
-    # - Main: delayed by intro_duration, fades in over 3s while intro fades out
+    # - Intro clip: visual only, audio starts after intro clip
+    # - Intro sound: fadeIn 0.5s, play intro_duration solo, then fadeOut 10s while main starts
+    # - Main: delayed by intro_clip + intro_duration, fades in over 3s while intro fades out
     # - Outro: fadeIn 10s before end, play 5s after main, fadeOut 0.5s
     volume_factor = volume / 100
     main_duration_sec = duration  # from load_audio
-    intro_delay_ms = int(intro_duration * 1000) if intro_sound else 0
+    # Total audio delay = intro clip duration + intro sound duration
+    intro_clip_delay_ms = int(intro_clip_duration * 1000) if intro_title else 0
+    intro_sound_delay_ms = int(intro_duration * 1000) if intro_sound else 0
+    total_audio_delay_ms = intro_clip_delay_ms + intro_sound_delay_ms
     intro_trim = intro_duration + 10  # solo + fadeout overlap
 
-    if intro_sound or outro_sound:
+    if intro_sound or outro_sound or intro_title:
         filter_parts = []
 
         if intro_sound:
-            # Main audio: normalize, apply volume, delay by intro_duration, fade in
-            filter_parts.append(f'[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume={volume_factor},adelay={intro_delay_ms}|{intro_delay_ms},afade=t=in:st=0:d=3[main]')
+            # Main audio: normalize, apply volume, delay by total delay (clip + sound), fade in
+            filter_parts.append(f'[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume={volume_factor},adelay={total_audio_delay_ms}|{total_audio_delay_ms},afade=t=in:st=0:d=3[main]')
+        elif intro_title:
+            # No intro sound but have intro clip: delay main by intro clip duration
+            filter_parts.append(f'[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume={volume_factor},adelay={intro_clip_delay_ms}|{intro_clip_delay_ms},afade=t=in:st=0:d=3[main]')
         else:
             # No intro: main starts immediately
             filter_parts.append(f'[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume={volume_factor},afade=t=in:st=0:d=3[main]')
 
         if intro_sound and outro_sound:
-            # Intro: normalize, lower volume (0.6), fadeIn 0.5s, fadeOut starting at intro_duration for 10s
-            filter_parts.append(f'[{intro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:{intro_trim},afade=t=in:st=0:d=0.5,afade=t=out:st={intro_duration}:d=10[intro]')
+            # Intro sound: normalize, lower volume (0.6), delay by intro clip, fadeIn 0.5s, fadeOut starting at intro_duration for 10s
+            intro_sound_start_delay = intro_clip_delay_ms
+            filter_parts.append(f'[{intro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:{intro_trim},afade=t=in:st=0:d=0.5,afade=t=out:st={intro_duration}:d=10,adelay={intro_sound_start_delay}|{intro_sound_start_delay}[intro]')
             # Outro: normalize, lower volume (0.6), fadeIn 10s, fadeOut last 0.5s
             filter_parts.append(f'[{outro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:15.5,afade=t=in:st=0:d=10,afade=t=out:st=15:d=0.5[outro]')
             # Delay outro to start 10s before main ends (account for main's delay)
-            outro_delay_ms = int(max(0, (main_duration_sec - 10)) * 1000) + intro_delay_ms
+            outro_delay_ms = int(max(0, (main_duration_sec - 10)) * 1000) + total_audio_delay_ms
             filter_parts.append(f'[outro]adelay={outro_delay_ms}|{outro_delay_ms}[outro_delayed]')
             # Mix all: intro + main first
             filter_parts.append('[intro][main]amix=inputs=2:duration=longest:weights=1 1:normalize=0[with_intro]')
             # Then add outro
             filter_parts.append('[with_intro][outro_delayed]amix=inputs=2:duration=longest:weights=1 1:normalize=0[aout]')
         elif intro_sound:
-            # Intro only: normalize, lower volume, fades
-            filter_parts.append(f'[{intro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:{intro_trim},afade=t=in:st=0:d=0.5,afade=t=out:st={intro_duration}:d=10[intro]')
+            # Intro sound only: normalize, lower volume, delay by intro clip, fades
+            intro_sound_start_delay = intro_clip_delay_ms
+            filter_parts.append(f'[{intro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:{intro_trim},afade=t=in:st=0:d=0.5,afade=t=out:st={intro_duration}:d=10,adelay={intro_sound_start_delay}|{intro_sound_start_delay}[intro]')
             filter_parts.append('[intro][main]amix=inputs=2:duration=longest:weights=1 1:normalize=0[aout]')
-        else:
+        elif outro_sound:
             # Outro only
             filter_parts.append(f'[{outro_idx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume=0.6,atrim=0:15.5,afade=t=in:st=0:d=10,afade=t=out:st=15:d=0.5[outro]')
-            outro_delay_ms = int(max(0, (main_duration_sec - 10)) * 1000)
+            outro_delay_ms = int(max(0, (main_duration_sec - 10)) * 1000) + intro_clip_delay_ms
             filter_parts.append(f'[outro]adelay={outro_delay_ms}|{outro_delay_ms}[outro_delayed]')
             filter_parts.append('[main][outro_delayed]amix=inputs=2:duration=longest:weights=1 1:normalize=0[aout]')
+        else:
+            # Intro clip only, no intro/outro sound - just use delayed main
+            filter_parts.append('[main]anull[aout]')
 
         ffmpeg_cmd.extend(['-filter_complex', ';'.join(filter_parts), '-map', '0:v', '-map', '[aout]'])
     elif volume != 100:
@@ -301,8 +456,8 @@ def render_video(
         ay = (height - avatar.height) // 2
 
     # Pre-build subtitle lookup table for O(1) access per frame
-    # Account for intro delay - subtitles sync with main audio which is delayed
-    subtitle_offset_frames = intro_frames
+    # Account for intro clip + audio delay - subtitles sync with main audio
+    subtitle_offset_frames = intro_clip_frame_count + intro_audio_frames
     subtitle_lookup = {}
     if subtitles:
         for sub in subtitles:
@@ -316,17 +471,38 @@ def render_video(
     report_interval = fps * 2  # Report every 2 seconds instead of every 1
 
     for i in range(total_frames):
-        # For intro frames, use frame 0 data (static); otherwise offset by intro_frames
-        data_idx = max(0, i - intro_frames) if intro_frames > 0 else i
-        data_idx = min(data_idx, n_frames - 1)  # Clamp to valid range
+        # Determine which phase we're in
+        if intro_clip_frame_count > 0 and i < intro_clip_frame_count:
+            # Phase 1: Intro clip frames
+            intro_frame = intro_clip_frames_list[i]
 
-        frame = visualizer.render_frame(background, frame_data, data_idx)
+            # Check if we're in the fade transition zone (last fade_duration_frames of intro)
+            fade_start = intro_clip_frame_count - fade_duration_frames
+            if i >= fade_start:
+                # Blend intro frame with first waveform frame
+                fade_progress = (i - fade_start) / fade_duration_frames
+                waveform_frame = visualizer.render_frame(background, frame_data, 0)
+                if avatar:
+                    if waveform_frame.mode != 'RGBA':
+                        waveform_frame = waveform_frame.convert('RGBA')
+                    waveform_frame.paste(avatar, (ax, ay), avatar)
+                frame = blend_frames(intro_frame, waveform_frame, fade_progress)
+            else:
+                frame = intro_frame
+        else:
+            # Phase 2: Main waveform frames (after intro clip)
+            # Calculate the data index accounting for intro clip and audio delay
+            main_frame_idx = i - intro_clip_frame_count
+            data_idx = max(0, main_frame_idx - intro_audio_frames) if intro_audio_frames > 0 else main_frame_idx
+            data_idx = min(data_idx, n_frames - 1)  # Clamp to valid range
 
-        # Overlay avatar at center
-        if avatar:
-            if frame.mode != 'RGBA':
-                frame = frame.convert('RGBA')
-            frame.paste(avatar, (ax, ay), avatar)
+            frame = visualizer.render_frame(background, frame_data, data_idx)
+
+            # Overlay avatar at center
+            if avatar:
+                if frame.mode != 'RGBA':
+                    frame = frame.convert('RGBA')
+                frame.paste(avatar, (ax, ay), avatar)
 
         # Draw subtitle if active (O(1) lookup)
         if i in subtitle_lookup:

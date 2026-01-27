@@ -7,6 +7,8 @@ from .renderer import render_video
 # Default directories (inside package)
 BACKGROUNDS_DIR = Path(__file__).parent / 'backgrounds'
 SOUNDS_DIR = Path(__file__).parent / 'sounds'
+FONTS_DIR = Path(__file__).parent / 'fonts'
+DEFAULT_INTRO_FONT = FONTS_DIR / 'BeVietnamPro-Bold.ttf'
 
 
 def discover_files(directory: Path, extensions: list[str]) -> list[Path]:
@@ -39,7 +41,11 @@ def discover_files(directory: Path, extensions: list[str]) -> list[Path]:
 @click.option('--intro', 'intro_sound', type=click.Path(exists=True), help='Intro sound file')
 @click.option('--intro-duration', default=3.0, type=float, help='Intro solo duration in seconds before main audio starts (default: 3)')
 @click.option('--outro', 'outro_sound', type=click.Path(exists=True), help='Outro sound file')
-def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width, height, fps, avatar_path, avatar_size, subtitle, subtitle_font_size, subtitle_color, volume, replacements, replace_file, intro_sound, intro_duration, outro_sound):
+@click.option('--intro-title', help='Title text to display on intro clip')
+@click.option('--intro-bg', type=click.Path(exists=True), help='Intro background (image or video file)')
+@click.option('--intro-font', type=click.Path(exists=True), help='Custom font for intro title (default: Be Vietnam Pro Bold)')
+@click.option('--intro-clip-duration', default=3.0, type=float, help='Intro clip duration in seconds (default: 3)')
+def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width, height, fps, avatar_path, avatar_size, subtitle, subtitle_font_size, subtitle_color, volume, replacements, replace_file, intro_sound, intro_duration, outro_sound, intro_title, intro_bg, intro_font, intro_clip_duration):
     """Generate waveform video from audio file."""
     # Handle random background selection (dynamic discovery)
     if bg_type == 'random':
@@ -66,6 +72,13 @@ def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width,
         if subtitle_color == 'auto':
             subtitle_color = calculate_auto_subtitle_color(temp_bg)
             click.echo(f"Auto subtitle color: {subtitle_color}")
+
+    # Handle intro clip settings
+    intro_font_path = intro_font if intro_font else str(DEFAULT_INTRO_FONT)
+    if intro_title:
+        click.echo(f"Intro clip: {intro_clip_duration}s with title")
+        if intro_bg:
+            click.echo(f"Intro background: {Path(intro_bg).name}")
 
     click.echo(f"Input: {input_audio}")
     click.echo(f"Output: {output_video}")
@@ -118,6 +131,10 @@ def main(input_audio, output_video, style, bg_type, bg_value, wave_color, width,
         intro_sound=intro_sound,
         intro_duration=intro_duration,
         outro_sound=outro_sound,
+        intro_title=intro_title,
+        intro_bg=intro_bg,
+        intro_font=intro_font_path,
+        intro_clip_duration=intro_clip_duration,
         progress_callback=progress
     )
 
