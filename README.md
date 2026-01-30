@@ -1,73 +1,164 @@
 # wavevid
 
-Audio to waveform video generator with avatar overlay and auto-transcribed subtitles.
+Turn your podcast or audio into stunning waveform videos with avatar, subtitles, and intro/outro — ready for social media.
 
 ![video](video.png)
 
-[Building process (Vietnamese)](https://tony.edu.vibery.app/resources/qua-trinh-xay-dung-cli-tool-de-tao-video-co-song-am-tu-audio-podcast)
+## Features
+
+- **5 visualization styles** — waveform, radial, bars, spectrum, particles
+- **Auto-generated subtitles** — via Soniox speech-to-text
+- **Intro/outro** — with title overlay, custom sounds, and fade transitions
+- **Background music** — loops throughout with adjustable volume
+- **Smart color detection** — auto-picks wave/subtitle colors from background
+- **Social media presets** — 16:9, 9:16, 1:1, 4:5 aspect ratios
+- **End screen** — auto-generated with avatar and title
 
 ## Install
 
 ```bash
+pip install wavevid
+```
+
+Or install from source:
+```bash
+git clone https://github.com/tf-vip/wavevid.git
+cd wavevid
 pip install -e .
 ```
 
-**Requirements:** FFmpeg must be installed (`brew install ffmpeg` on macOS).
+**Requires:** FFmpeg (`brew install ffmpeg` on macOS, `apt install ffmpeg` on Ubuntu)
 
-## Usage
+## Quick Start
 
 ```bash
-wavevid input.m4a -o output.mp4 [options]
+# Basic waveform video
+wavevid audio.m4a -o video.mp4
+
+# Square video with avatar for social media
+wavevid audio.m4a -o video.mp4 --aspect 1:1 --avatar photo.jpg
+
+# Full-featured podcast video
+wavevid podcast.m4a -o podcast.mp4 \
+  --style radial \
+  --bg random \
+  --avatar host.jpg \
+  --subtitle \
+  --intro intro.wav \
+  --intro-title "My Podcast" \
+  --bg-music jazz.mp3
 ```
 
-### Options
+## Options
+
+### Video
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `-o, --output` | output.mp4 | Output video file |
-| `--style` | waveform | Visualization: `waveform`, `radial`, `bars` |
-| `--bg` | color | Background: `color`, `gradient`, `image`, `random` |
-| `--bg-value` | #1a1a2e | Hex color, "color1,color2" for gradient, or image path |
-| `--wave-color` | #00ff88 | Wave/bar color (hex) |
-| `--width` | 1920 | Video width |
-| `--height` | 1080 | Video height |
+| `-o, --output` | output.mp4 | Output file |
+| `--aspect` | - | Preset: `16:9`, `9:16`, `1:1`, `4:5` |
+| `--width` | 1920 | Video width (if no aspect) |
+| `--height` | 1080 | Video height (if no aspect) |
 | `--fps` | 30 | Frames per second |
-| `--avatar` | - | Avatar image path (centered, circular) |
-| `--avatar-size` | auto | Avatar size in pixels |
-| `--subtitle` | off | Enable Soniox transcription |
-| `--subtitle-font-size` | auto | Font size for subtitles |
-| `--subtitle-color` | #ffffff | Subtitle text color |
+| `--preset` | ultrafast | Encoding: `ultrafast` to `veryslow` |
+| `--thumbnail` | - | Save thumbnail image |
+
+### Visualization
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--style` | waveform | `waveform`, `radial`, `bars`, `spectrum`, `particles` |
+| `--bg` | color | `color`, `gradient`, `image`, `random` |
+| `--bg-value` | #1a1a2e | Hex, "color1,color2", or image path |
+| `--wave-color` | #00ff88 | Hex or `auto` (detect from background) |
+| `--wave-sync` | 0 | Sync offset in seconds |
+
+### Avatar & Subtitles
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--avatar` | - | Avatar image (centered, circular) |
+| `--avatar-size` | auto | Size in pixels |
+| `--subtitle` | off | Enable transcription |
+| `--subtitle-color` | auto | Hex or `auto` |
+| `--subtitle-font-size` | auto | Font size in pixels |
+| `--replace` | - | Text replacement: `old=new` |
+| `--replace-file` | - | File with replacements |
+
+### Audio
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--volume` | 100 | Main audio volume % |
+| `--intro` | - | Intro sound file |
+| `--intro-duration` | 3 | Intro solo duration (seconds) |
+| `--outro` | - | Outro sound file |
+| `--bg-music` | - | Background music (loops) |
+| `--bg-music-volume` | 15 | Background music volume % |
+| `--audio-only` | - | Output audio mix only |
+
+### Intro Clip
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--intro-title` | - | Title text overlay |
+| `--intro-subtitle` | - | Subtitle below title |
+| `--intro-bg` | - | Intro background (image or video) |
+| `--intro-clip-duration` | 3 | Intro clip length (seconds) |
+| `--intro-static` | animated | Static intro (better thumbnails) |
+| `--intro-title-color` | auto | Hex or `auto` |
+
+### End Screen
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--end-screen` | auto | Enable end screen |
+| `--end-screen-duration` | 5 | Duration in seconds |
 
 ## Examples
 
-### Basic waveform
+### Podcast with everything
 ```bash
-wavevid audio.m4a -o video.mp4
-```
-
-### Radial with avatar (Facebook 1:1)
-```bash
-wavevid audio.m4a -o video.mp4 \
+wavevid episode.m4a -o episode.mp4 \
   --style radial \
-  --avatar avatar.jpg \
-  --width 1080 --height 1080
-```
-
-### Random background + subtitles
-```bash
-wavevid audio.m4a -o video.mp4 \
-  --style bars \
+  --aspect 1:1 \
   --bg random \
-  --avatar avatar.jpg \
+  --wave-color auto \
+  --avatar host.jpg \
   --subtitle \
-  --width 1080 --height 1080
+  --subtitle-color auto \
+  --intro intro.wav \
+  --intro-title "Episode 42" \
+  --intro-subtitle "The Answer to Everything" \
+  --outro outro.wav \
+  --bg-music lofi.mp3 \
+  --bg-music-volume 10
 ```
 
-### Gradient background
+### Instagram Reels (9:16)
+```bash
+wavevid clip.m4a -o reel.mp4 \
+  --style bars \
+  --aspect 9:16 \
+  --bg gradient \
+  --bg-value "#667eea,#764ba2" \
+  --avatar photo.jpg
+```
+
+### Audio mix only (no video)
+```bash
+wavevid podcast.m4a -o mixed.m4a \
+  --audio-only \
+  --intro intro.wav \
+  --outro outro.wav \
+  --bg-music jazz.mp3
+```
+
+### High quality export
 ```bash
 wavevid audio.m4a -o video.mp4 \
-  --bg gradient \
-  --bg-value "#1a1a2e,#4a0e4e"
+  --preset slow \
+  --fps 60
 ```
 
 ## Subtitles
@@ -79,35 +170,42 @@ Subtitles use [Soniox API](https://soniox.com) for transcription.
    ```
    SONIOX_API_KEY=your_key_here
    ```
-3. Run with `--subtitle` flag
+3. Run with `--subtitle`
 
 Transcripts are cached in `.transcribe_cache/` to avoid repeated API calls.
 
-## Facebook Video Specs
+### Text Replacements
 
-| Placement | Ratio | Resolution |
-|-----------|-------|------------|
-| Feed | 1:1 or 4:5 | 1080x1080 or 1080x1350 |
-| Reels/Stories | 9:16 | 1080x1920 |
+Fix transcription errors with `--replace` or `--replace-file`:
 
-## Adding Backgrounds
+```bash
+# Single replacement
+wavevid audio.m4a -o video.mp4 --subtitle --replace "AI=A.I."
 
-Add `.jpg` or `.png` files to `wavevid/backgrounds/` for use with `--bg random`.
-
-## Structure
-
+# Multiple from file
+wavevid audio.m4a -o video.mp4 --subtitle --replace-file fixes.txt
 ```
-wavevid/
-├── __init__.py
-├── cli.py           # CLI entry point
-├── audio.py         # Audio analysis (librosa)
-├── backgrounds.py   # Background generators
-├── renderer.py      # Frame generation + FFmpeg
-├── transcribe.py    # Soniox API + caching
-├── backgrounds/     # Default background images
-└── visualizers/
-    ├── base.py      # Base class
-    ├── waveform.py  # Horizontal wave
-    ├── radial.py    # Circular bars
-    └── bars.py      # Equalizer bars
+
+`fixes.txt`:
 ```
+AI=A.I.
+gonna=going to
+# comments are ignored
+```
+
+## Social Media Specs
+
+| Platform | Ratio | Resolution | Aspect Flag |
+|----------|-------|------------|-------------|
+| YouTube | 16:9 | 1920×1080 | `--aspect 16:9` |
+| Instagram Feed | 1:1 | 1080×1080 | `--aspect 1:1` |
+| Instagram/TikTok | 9:16 | 1080×1920 | `--aspect 9:16` |
+| Facebook Feed | 4:5 | 1080×1350 | `--aspect 4:5` |
+
+## Custom Backgrounds
+
+Add images to `src/wavevid/backgrounds/` for `--bg random`, or use `--bg image --bg-value path/to/image.jpg`.
+
+## License
+
+MIT
