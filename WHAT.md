@@ -4,6 +4,7 @@ audience: ["Người có podcast hoặc file audio muốn làm video cho YouTube
 needs: ["Claude Code", "Python 3.10 trở lên", "FFmpeg", "Khoá API Soniox (khi muốn tạo phụ đề tự động)"]
 lessons: []
 version: 0.1.1
+demo: https://www.facebook.com/reel/1483655819867738
 ---
 
 ## Nó làm gì
@@ -11,6 +12,8 @@ version: 0.1.1
 wavevid là CLI, tức tool bạn chạy bằng cách gõ lệnh trong terminal, cửa sổ để nhập lệnh vào máy. Nó nhận một file podcast hoặc audio rồi xuất thành video có sóng âm chạy theo giọng nói, ảnh đại diện, phụ đề và phần mở đầu hoặc kết thúc. Video làm xong có thể dùng cho YouTube, Facebook, Instagram hay TikTok.
 
 Bạn chọn một trong năm kiểu sóng âm: `waveform`, `radial`, `bars`, `spectrum` hoặc `particles`. Phần nền có thể là một màu, màu chuyển, ảnh của bạn hoặc để tool chọn ngẫu nhiên. Khi dùng `--wave-color auto`, wavevid lấy màu sóng và màu phụ đề từ nền.
+
+Xem video mẫu làm bằng công cụ này: https://www.facebook.com/reel/1483655819867738
 
 ## Nó giúp bạn thế nào
 
