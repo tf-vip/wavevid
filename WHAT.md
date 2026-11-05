@@ -33,7 +33,7 @@ Trong `examples/` có 10 script mẫu, tức các lệnh đã soạn sẵn, từ
 
 ## Bắt đầu
 
-Trên tài nguyên “Source CLI tool để tạo video có sóng âm từ audio (Podcast)” trong Vibery, bấm “tải .zip”, giải nén rồi mở thư mục bằng Claude Code. Nói đúng: “Đọc WHAT.md và CLAUDE.md, rồi hướng dẫn mình chạy dự án này trên máy.” Claude Code sẽ kiểm tra Python và FFmpeg, cài wavevid, rồi làm video đầu tiên từ file audio của bạn.
+Trên tài nguyên “Source CLI tool để tạo video có sóng âm từ audio (Podcast)” trong Vibery, bấm “tải .zip”, giải nén rồi mở thư mục bằng Claude Code. Nói đúng: “Đọc README.md rồi giúp mình bắt đầu.” Claude Code sẽ kiểm tra Python và FFmpeg, cài wavevid, rồi làm video đầu tiên từ file audio của bạn.
 
 Nếu dùng Git, repo public nên không cần đăng nhập GitHub. Chạy `git clone https://github.com/tf-vip/wavevid.git`, rồi `cd wavevid` và `pip install -e .`. Lệnh ngắn nhất để thử là `wavevid audio.m4a -o video.mp4`; muốn video vuông có avatar, dùng `wavevid audio.m4a -o video.mp4 --aspect 1:1 --avatar photo.jpg`.
 
